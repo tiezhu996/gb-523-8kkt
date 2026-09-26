@@ -115,3 +115,29 @@ func (h *LayoutScenarioHandler) Compare(c *gin.Context) {
 	}
 	web.OK(c, comparison)
 }
+
+// RelocationTrial is a read-only what-if; it never writes the scenario.
+func (h *LayoutScenarioHandler) RelocationTrial(c *gin.Context) {
+	id, ok := web.ParamID(c)
+	if !ok {
+		return
+	}
+	loadValue, err := strconv.ParseUint(c.Query("load_id"), 10, 64)
+	if err != nil || loadValue == 0 {
+		web.Fail(c, web.BadRequest("INVALID_LOAD_ID", "load_id must be a positive integer", err))
+		return
+	}
+	rackValue, err := strconv.ParseUint(c.Query("rack_id"), 10, 64)
+	if err != nil || rackValue == 0 {
+		web.Fail(c, web.BadRequest("INVALID_RACK_ID", "rack_id must be a positive integer", err))
+		return
+	}
+	trial, err := h.service.RelocationTrial(c.Request.Context(), id, dto.RelocationTrialRequest{
+		LoadID: uint(loadValue), RackID: uint(rackValue),
+	})
+	if err != nil {
+		web.Fail(c, err)
+		return
+	}
+	web.OK(c, trial)
+}

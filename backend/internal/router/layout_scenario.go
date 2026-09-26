@@ -10,6 +10,7 @@ func RegisterLayoutScenarioRoutes(api *gin.RouterGroup, h *handler.LayoutScenari
 	scenarios.GET("", h.List)
 	scenarios.GET("/:id", h.Get)
 	scenarios.GET("/:id/compare", h.Compare)
+	scenarios.GET("/:id/relocation-trial", h.RelocationTrial)
 	scenarios.POST("", plan, h.Create)
 	scenarios.POST("/:id/evaluate", plan, h.Evaluate)
 	scenarios.POST("/:id/transition", review, h.Transition)

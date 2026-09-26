@@ -11,7 +11,7 @@ import { LucideAngularModule } from 'lucide-angular';
 import { finalize, forkJoin } from 'rxjs';
 import { EquipmentLoad } from '../../types/load';
 import { Rack } from '../../types/rack';
-import { LayoutScenario, RackAssignment, ScenarioStatus } from '../../types/scenario';
+import { LayoutScenario, RackAssignment, RelocationTrial, ScenarioStatus } from '../../types/scenario';
 import { LoadApi } from '../api/load.api';
 import { RackApi } from '../api/rack.api';
 import { ScenarioApi } from '../api/scenario.api';
@@ -67,6 +67,87 @@ import { ScenarioStore } from '../stores/scenario.store';
           <div class="metric"><small>Constraint evidence</small><strong>{{ active.violations.length }}</strong><span>{{ criticalCount() }} critical</span></div>
         </section>
 
+        @if (active.evaluated) {
+          <section class="panel relocation-panel">
+            <div class="panel-header">
+              <h2>Relocation what-if <span class="secondary">read-only trial, scenario is never modified</span></h2>
+              <button mat-stroked-button type="button" (click)="toggleRelocation()"><lucide-icon name="move" [size]="14" /> {{ relocationOpen() ? 'Close trial' : 'Trial a move' }}</button>
+            </div>
+            @if (relocationOpen()) {
+              <div class="panel-body relocation-body">
+                <div class="relocation-controls">
+                  <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                    <mat-label>Equipment to move</mat-label>
+                    <mat-select [value]="relocationLoadId()" (selectionChange)="relocationLoadId.set($event.value); relocationResult.set(null)">
+                      @for (load of relocationLoads(); track load.id) {
+                        <mat-option [value]="load.id">{{ load.name }} — {{ load.power_kw | number:'1.0-1' }} kW / {{ load.rack_units }}U / {{ load.redundancy_group }}</mat-option>
+                      }
+                    </mat-select>
+                  </mat-form-field>
+                  <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                    <mat-label>Target rack</mat-label>
+                    <mat-select [value]="relocationRackId()" (selectionChange)="relocationRackId.set($event.value); relocationResult.set(null)">
+                      @for (rack of racks(); track rack.id) {
+                        <mat-option [value]="rack.id">{{ rack.rack_code }} / {{ rack.zone_code }} / {{ rack.rack_status }}</mat-option>
+                      }
+                    </mat-select>
+                  </mat-form-field>
+                  <button mat-flat-button color="primary" type="button" [disabled]="!relocationReady()" (click)="runRelocation()">
+                    <lucide-icon name="calculator" [size]="15" /> {{ relocationRunning() ? 'Calculating...' : 'Calculate trial' }}
+                  </button>
+                </div>
+                @if (relocationResult(); as trial) {
+                  <div class="trial-result" [class.feasible]="trial.feasible" [class.blocked]="!trial.feasible">
+                    <div class="trial-verdict">
+                      <app-constraint-badge [severity]="trial.feasible ? 'clear' : 'critical'" [label]="trial.feasible ? 'Move fits all constraints' : 'Move blocked'" />
+                      <p class="secondary" [class.verdict-line]="true">
+                        Moving <strong>{{ trial.load.name }}</strong> from
+                        @if (trial.source.has_placement) { <strong>{{ trial.source.rack_code }} ({{ trial.source.zone_code }})</strong> } @else { <strong>unplaced</strong> }
+                        to <strong>{{ trial.target_rack.rack_code }} ({{ trial.target_rack.zone_code }})</strong>@if (trial.source.same_rack) { — same rack, original slot vacated first}.
+                      </p>
+                      @if (trial.blocking_constraints.length > 0) {
+                        <p class="blocking-codes">Blocking: {{ trial.blocking_constraints.join(', ') }}</p>
+                      }
+                    </div>
+                    <div class="trial-grid">
+                      <div class="trial-card">
+                        <h3>Target rack {{ trial.target_rack.rack_code }} <span class="secondary">{{ trial.target_rack.rack_status }}</span></h3>
+                        <table class="data-table">
+                          <tbody>
+                            <tr><td>Power</td><td [class.over]="trial.target_rack.power_headroom_kw < 0">{{ trial.target_rack.projected.power_kw | number:'1.0-1' }} / {{ trial.target_rack.power_limit_kw | number:'1.0-0' }} kW (headroom {{ trial.target_rack.power_headroom_kw | number:'1.0-1' }})</td></tr>
+                            <tr><td>Airflow</td><td [class.over]="trial.target_rack.airflow_headroom_cfm < 0">{{ trial.target_rack.projected.airflow_cfm | number:'1.0-0' }} / {{ trial.target_rack.airflow_limit_cfm | number:'1.0-0' }} CFM (headroom {{ trial.target_rack.airflow_headroom_cfm | number:'1.0-0' }})</td></tr>
+                            <tr><td>Rack units</td><td [class.over]="trial.target_rack.units_headroom < 0">{{ trial.target_rack.projected.rack_units }} / {{ trial.target_rack.rack_units_limit }} U (headroom {{ trial.target_rack.units_headroom }})</td></tr>
+                            <tr><td class="secondary">Before → vacated → after</td><td class="secondary">{{ trial.target_rack.occupied_before.power_kw | number:'1.0-1' }} kW / {{ trial.target_rack.occupied_before.rack_units }}U → {{ trial.target_rack.vacated.power_kw | number:'1.0-1' }} kW / {{ trial.target_rack.vacated.rack_units }}U → {{ trial.target_rack.projected.power_kw | number:'1.0-1' }} kW / {{ trial.target_rack.projected.rack_units }}U</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="trial-card">
+                        <h3>Target zone {{ trial.target_zone.zone_code }} <span class="secondary">{{ trial.target_zone.zone_status }}</span></h3>
+                        <table class="data-table">
+                          <tbody>
+                            <tr><td>Cooling</td><td [class.over]="trial.target_zone.cooling_margin_kw < 0">{{ trial.target_zone.projected_heat_kw | number:'1.0-1' }} / {{ trial.target_zone.cooling_capacity_kw | number:'1.0-0' }} kW (margin {{ trial.target_zone.cooling_margin_kw | number:'1.0-1' }})</td></tr>
+                            <tr><td>Estimated return</td><td [class.over]="trial.target_zone.temperature_margin_c < 0">{{ trial.target_zone.estimated_return_c | number:'1.1-1' }} C / limit {{ trial.target_zone.max_return_temp_c | number:'1.0-0' }} C (margin {{ trial.target_zone.temperature_margin_c | number:'1.1-1' }} C)</td></tr>
+                            <tr><td class="secondary">Zone heat</td><td class="secondary">{{ trial.target_zone.assigned_heat_before_kw | number:'1.0-1' }} kW before → {{ trial.target_zone.remaining_heat_after_vacate_kw | number:'1.0-1' }} after vacate → {{ trial.target_zone.projected_heat_kw | number:'1.0-1' }} projected</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    @if (trial.violations.length > 0) {
+                      <div class="trial-violations">
+                        @for (item of trial.violations; track item.code + item.entity_id) {
+                          <div class="violation"><app-constraint-badge [severity]="item.severity" [label]="item.code" /><p>{{ item.message }}</p><small>{{ item.entity_type }} #{{ item.entity_id }} / actual {{ item.actual | number:'1.0-1' }} / limit {{ item.limit | number:'1.0-1' }}</small></div>
+                        }
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </section>
+        } @else if (active.scenario_status === 'draft') {
+          <section class="panel"><div class="empty"><span><strong>No evaluated placement yet</strong>Evaluate the draft before running a relocation trial.</span></div></section>
+        }
+
         <div class="planner-grid">
           <section class="layout-surface">
             <div class="surface-header"><span><strong>Candidate rack map</strong><small>Fixed rack coordinates with placement result</small></span><app-constraint-badge [severity]="active.has_critical_violation ? 'critical' : 'clear'" [label]="active.has_critical_violation ? 'Approval blocked' : 'Constraints clear'" /></div>
@@ -115,6 +196,8 @@ import { ScenarioStore } from '../stores/scenario.store';
   styles: [`
     .scenario-builder{margin-bottom:16px;padding:16px;background:#fff;border:1px solid #aeb6bd;border-top:3px solid #cf3f2e}.scenario-builder form{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px}.load-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 12px;max-height:180px;overflow:auto;padding:2px}.load-picker strong,.load-picker small{display:block;letter-spacing:0}.load-picker strong{font-size:11px}.load-picker small{color:#68717a;font-size:9px}.builder-actions{grid-column:1/-1;display:flex;align-items:center;justify-content:flex-end;gap:8px;border-top:1px solid #d8dde1;padding-top:10px}.builder-actions>span{margin-right:auto;color:#68717a;font-size:11px}.control-bar{min-height:66px;display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:9px 12px;background:#fff;border:1px solid #d8dde1}.control-bar mat-form-field{width:min(440px,40vw)}.control-spacer{flex:1}.algorithm{color:#68717a;font:600 10px/1 monospace}.planner-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}.layout-surface{min-width:0;background:#23282d;border:1px solid #101214;color:#eef1f3}.surface-header{min-height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 15px;border-bottom:1px solid #42494f}.surface-header strong,.surface-header small{display:block;letter-spacing:0}.surface-header strong{font-size:13px}.surface-header small{margin-top:3px;color:#aeb6bc;font-size:10px}.candidate-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;padding:14px}.candidate-rack{height:158px;display:grid;grid-template-rows:27px 1fr 28px;min-width:0;background:#15191d;border:1px solid #596168;border-top:4px solid #4b9a77;border-radius:3px;overflow:hidden}.candidate-rack.warm{border-top-color:#d79318}.candidate-rack.hot{border-top-color:#cf3f2e}.candidate-rack.blocked{opacity:.58;border-top-color:#778087}.candidate-rack header,.candidate-rack footer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 8px;background:#2b3136}.candidate-rack header strong{font-size:11px}.candidate-rack header span{color:#aeb6bc;font-size:9px}.assigned-loads{display:grid;align-content:start;gap:4px;padding:7px;overflow:auto}.assigned-loads>div{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:4px;padding:5px;color:#e8ecee;background:#30373c;border-left:2px solid #d79318;font-size:9px}.assigned-loads>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.assigned-loads>div strong{font-size:8px}.vacant{margin:auto;color:#7f8990;font-size:9px;text-transform:uppercase}.candidate-rack footer{color:#b8c0c5;font-size:8px}.candidate-rack footer span{display:flex;align-items:center;gap:3px}.evidence-panel{background:#fff;border:1px solid #d8dde1}.evidence-section{padding:14px}.evidence-section+ .evidence-section{border-top:1px solid #d8dde1}.evidence-section h2{margin:0 0 9px;font-size:12px;text-transform:uppercase}.thermal-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #e5e8ea}.thermal-row:last-child{border-bottom:0}.thermal-row strong,.thermal-row small{display:block;letter-spacing:0}.thermal-row strong{font-size:11px}.thermal-row small{margin-top:3px;color:#68717a;font-size:9px}.temperature{text-align:right}.temperature strong{font-size:15px}.violation{padding:11px 0;border-bottom:1px solid #e5e8ea}.violation:last-child{border-bottom:0}.violation p{margin:7px 0 4px;font-size:11px;line-height:1.4}.violation>small{color:#68717a;font-size:9px}.aside-empty{padding:18px 4px;color:#68717a;font-size:11px;text-align:center}.assignments-panel{margin-top:16px}
     @media(max-width:1150px){.planner-grid{grid-template-columns:1fr}.evidence-panel{display:grid;grid-template-columns:1fr 1fr}.evidence-section+.evidence-section{border-top:0;border-left:1px solid #d8dde1}}@media(max-width:760px){.scenario-builder form{grid-template-columns:1fr}.control-bar{align-items:stretch;flex-wrap:wrap}.control-bar mat-form-field{width:100%}.control-spacer{display:none}.candidate-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:9px}.evidence-panel{grid-template-columns:1fr}.evidence-section+.evidence-section{border-left:0;border-top:1px solid #d8dde1}}@media(max-width:430px){.candidate-grid{grid-template-columns:1fr}}
+    .relocation-panel{margin-bottom:16px}.relocation-panel .panel-header h2{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.relocation-controls{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}.relocation-controls mat-form-field{min-width:260px;flex:1;max-width:380px}.trial-result{margin-top:14px;padding:14px;border:1px solid #d8dde1;border-left:4px solid #4b9a77;background:#f6faf8;border-radius:3px}.trial-result.blocked{border-left-color:#cf3f2e;background:#fff6f5}.trial-verdict{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}.verdict-line{margin:0}.blocking-codes{margin:2px 0 0;font:700 10px/1.4 monospace;color:#a1281e;text-transform:uppercase}.trial-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.trial-card{background:#fff;border:1px solid #e5e8ea;padding:10px 12px}.trial-card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase}.trial-card td.over{color:#a1281e;font-weight:700}.trial-violations{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0 18px}.trial-violations .violation{padding:9px 0;border-bottom:1px solid #e5e8ea}.trial-violations .violation p{margin:6px 0 3px;font-size:11px;line-height:1.4}.trial-violations .violation>small{color:#68717a;font-size:9px}
+    @media(max-width:760px){.trial-grid{grid-template-columns:1fr}.relocation-controls mat-form-field{max-width:none}}
   `]
 })
 export class PlannerPage {
@@ -129,13 +212,27 @@ export class PlannerPage {
   readonly selectedLoadIds = signal<Set<number>>(new Set());
   readonly readyLoads = computed(() => this.loads().filter((load) => load.load_status === 'ready'));
   readonly criticalCount = computed(() => this.selected()?.violations.filter((item) => item.severity === 'critical').length ?? 0);
+  readonly relocationOpen = signal(false);
+  readonly relocationRunning = signal(false);
+  readonly relocationLoadId = signal<number | null>(null);
+  readonly relocationRackId = signal<number | null>(null);
+  readonly relocationResult = signal<RelocationTrial | null>(null);
+  readonly relocationLoads = computed<EquipmentLoad[]>(() => {
+    const scenario = this.selected();
+    if (!scenario) {
+      return [];
+    }
+    const memberIds = new Set(scenario.load_ids);
+    return this.loads().filter((load) => memberIds.has(load.id));
+  });
+  readonly relocationReady = computed(() => this.relocationLoadId() !== null && this.relocationRackId() !== null && !this.relocationRunning());
   readonly form = this.fb.nonNullable.group({name: ['', [Validators.required, Validators.minLength(3)]]});
 
   constructor(private readonly fb: FormBuilder, private readonly scenarioApi: ScenarioApi, private readonly rackApi: RackApi, private readonly loadApi: LoadApi, readonly store: ScenarioStore, private readonly snack: MatSnackBar) { this.load(); }
   canPlan(): boolean { return this.auth.hasRole('planner', 'admin'); }
   canApprove(): boolean { return this.auth.hasRole('reviewer', 'admin'); }
-  load(): void { forkJoin({scenarios: this.scenarioApi.list(), racks: this.rackApi.list(), loads: this.loadApi.list()}).subscribe(({scenarios, racks, loads}) => { this.scenarios.set(scenarios.items); this.racks.set(racks.items); this.loads.set(loads.items); const current = this.selected(); const selected = scenarios.items.find((item) => item.id === current?.id) ?? scenarios.items[0] ?? null; this.store.select(selected); if (this.selectedLoadIds().size === 0) this.selectedLoadIds.set(new Set(loads.items.filter((item) => item.load_status === 'ready').map((item) => item.id))); }); }
-  selectScenario(id: number): void { this.store.select(this.scenarios().find((item) => item.id === id) ?? null); }
+  load(): void { forkJoin({scenarios: this.scenarioApi.list(), racks: this.rackApi.list(), loads: this.loadApi.list()}).subscribe(({scenarios, racks, loads}) => { this.scenarios.set(scenarios.items); this.racks.set(racks.items); this.loads.set(loads.items); const current = this.selected(); const selected = scenarios.items.find((item) => item.id === current?.id) ?? scenarios.items[0] ?? null; this.store.select(selected); this.resetRelocation(); if (this.selectedLoadIds().size === 0) this.selectedLoadIds.set(new Set(loads.items.filter((item) => item.load_status === 'ready').map((item) => item.id))); }); }
+  selectScenario(id: number): void { this.store.select(this.scenarios().find((item) => item.id === id) ?? null); this.resetRelocation(); }
   toggleLoad(id: number, checked: boolean): void { const next = new Set(this.selectedLoadIds()); checked ? next.add(id) : next.delete(id); this.selectedLoadIds.set(next); }
   createScenario(): void { if (this.form.invalid || this.selectedLoadIds().size === 0) return; this.creating.set(true); this.scenarioApi.create(this.form.controls.name.value, [...this.selectedLoadIds()]).pipe(finalize(() => this.creating.set(false))).subscribe((scenario) => { this.createOpen.set(false); this.form.reset(); this.scenarios.update((items) => [scenario, ...items]); this.store.select(scenario); this.snack.open('Draft scenario created', undefined, {duration: 2200}); }); }
   evaluate(): void { const scenario = this.selected(); if (!scenario) return; this.evaluation.evaluate(scenario).subscribe((result) => { this.store.select(result); this.scenarios.update((items) => items.map((item) => item.id === result.id ? result : item)); this.snack.open(`Evaluation complete: score ${result.score.toFixed(1)}`, undefined, {duration: 2800}); }); }
@@ -143,4 +240,22 @@ export class PlannerPage {
   assignmentsFor(rackId: number): RackAssignment[] { return this.selected()?.assignments.filter((item) => item.rack_id === rackId) ?? []; }
   rackPower(rackId: number): number { return this.assignmentsFor(rackId).reduce((sum, item) => sum + item.power_kw, 0); }
   rackHeat(rackId: number): number { return this.assignmentsFor(rackId).reduce((sum, item) => sum + item.heat_kw, 0); }
+  resetRelocation(): void { this.relocationLoadId.set(null); this.relocationRackId.set(null); this.relocationResult.set(null); }
+  toggleRelocation(): void { const next = !this.relocationOpen(); this.relocationOpen.set(next); if (!next) { this.resetRelocation(); } }
+  relocationLoadName(loadId: number | null): string { return this.loads().find((load) => load.id === loadId)?.name ?? ''; }
+  runRelocation(): void {
+    const scenario = this.selected();
+    const loadId = this.relocationLoadId();
+    const rackId = this.relocationRackId();
+    if (!scenario || loadId === null || rackId === null) {
+      return;
+    }
+    this.relocationRunning.set(true);
+    this.scenarioApi.relocationTrial(scenario.id, loadId, rackId)
+      .pipe(finalize(() => this.relocationRunning.set(false)))
+      .subscribe({
+        next: (result) => { this.relocationResult.set(result); },
+        error: () => { this.relocationResult.set(null); },
+      });
+  }
 }
