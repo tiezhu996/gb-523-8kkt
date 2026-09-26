@@ -34,3 +34,12 @@ func (s LayoutScenario) IsEditable() bool {
 func (s LayoutScenario) IsTerminal() bool {
 	return s.ScenarioStatus == constants.ScenarioArchived
 }
+
+func (s LayoutScenario) HasEvaluationResults() bool {
+	switch s.ScenarioStatus {
+	case constants.ScenarioPendingReview, constants.ScenarioApproved, constants.ScenarioArchived:
+		return true
+	default:
+		return false
+	}
+}

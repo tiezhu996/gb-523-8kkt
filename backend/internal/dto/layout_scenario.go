@@ -24,6 +24,39 @@ type TransitionScenarioRequest struct {
 	Reason       string                   `json:"reason" binding:"max=500"`
 }
 
+type RelocationTrialRequest struct {
+	LoadID uint `json:"load_id" binding:"required"`
+	RackID uint `json:"rack_id" binding:"required"`
+}
+
+type RelocationRackResult struct {
+	RackID          uint    `json:"rack_id"`
+	RackCode        string  `json:"rack_code"`
+	PowerKW         float64 `json:"power_kw"`
+	PowerLimitKW    float64 `json:"power_limit_kw"`
+	AirflowCFM      float64 `json:"airflow_cfm"`
+	AirflowLimitCFM float64 `json:"airflow_limit_cfm"`
+	RackUnits       int     `json:"rack_units"`
+	RackUnitLimit   int     `json:"rack_unit_limit"`
+}
+
+type RelocationTrialResponse struct {
+	ScenarioID     uint                  `json:"scenario_id"`
+	LoadID         uint                  `json:"load_id"`
+	LoadName       string                `json:"load_name"`
+	SourceRackID   uint                  `json:"source_rack_id"`
+	SourceRackCode string                `json:"source_rack_code"`
+	TargetRackID   uint                  `json:"target_rack_id"`
+	TargetRackCode string                `json:"target_rack_code"`
+	TargetZoneID   uint                  `json:"target_zone_id"`
+	TargetZoneCode string                `json:"target_zone_code"`
+	Rack           RelocationRackResult  `json:"rack"`
+	Zone           ZoneThermalResult     `json:"zone"`
+	Feasible       bool                  `json:"feasible"`
+	Violations     []ConstraintViolation `json:"violations"`
+	Summary        string                `json:"summary"`
+}
+
 type ConstraintViolation struct {
 	Code       string  `json:"code"`
 	Severity   string  `json:"severity"`

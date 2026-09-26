@@ -28,6 +28,14 @@ type scenarioInputSnapshot struct {
 	AlgorithmVersion string `json:"algorithm_version"`
 }
 
+type scenarioEvaluationSnapshot struct {
+	LoadIDs          []uint                `json:"load_ids"`
+	AlgorithmVersion string                `json:"algorithm_version"`
+	Zones            []model.ThermalZone   `json:"zones"`
+	Racks            []model.Rack          `json:"racks"`
+	Loads            []model.EquipmentLoad `json:"loads"`
+}
+
 func NewLayoutScenarioService(scenarios *repository.LayoutScenarioRepository, zones *repository.ThermalZoneRepository, racks *repository.RackRepository, loads *repository.EquipmentLoadRepository, engine *planner.Engine) *LayoutScenarioService {
 	return &LayoutScenarioService{scenarios: scenarios, zones: zones, racks: racks, loads: loads, engine: engine}
 }
@@ -124,13 +132,9 @@ func (s *LayoutScenarioService) Evaluate(ctx context.Context, id, version uint, 
 	if err != nil {
 		return dto.ScenarioResponse{}, web.Internal(fmt.Errorf("encode violations: %w", err))
 	}
-	fullSnapshot, err := json.Marshal(struct {
-		LoadIDs          []uint                `json:"load_ids"`
-		AlgorithmVersion string                `json:"algorithm_version"`
-		Zones            []model.ThermalZone   `json:"zones"`
-		Racks            []model.Rack          `json:"racks"`
-		Loads            []model.EquipmentLoad `json:"loads"`
-	}{LoadIDs: input.LoadIDs, AlgorithmVersion: planner.AlgorithmVersion, Zones: zones, Racks: racks, Loads: loads})
+	fullSnapshot, err := json.Marshal(scenarioEvaluationSnapshot{
+		LoadIDs: input.LoadIDs, AlgorithmVersion: planner.AlgorithmVersion, Zones: zones, Racks: racks, Loads: loads,
+	})
 	if err != nil {
 		return dto.ScenarioResponse{}, web.Internal(fmt.Errorf("encode evaluation snapshot: %w", err))
 	}
@@ -146,6 +150,80 @@ func (s *LayoutScenarioService) Evaluate(ctx context.Context, id, version uint, 
 		return dto.ScenarioResponse{}, err
 	}
 	return s.Get(ctx, id)
+}
+
+// RelocationTrial is a read-only what-if: it replays the scenario's frozen
+// placement with one load moved into a target rack and reports the resulting
+// rack usage, target-zone cooling and estimated return temperature, plus the
+// constraints that would block the move. The scenario itself is never changed.
+func (s *LayoutScenarioService) RelocationTrial(ctx context.Context, id uint, req dto.RelocationTrialRequest) (dto.RelocationTrialResponse, error) {
+	scenario, err := s.scenarios.Get(ctx, id)
+	if err != nil {
+		return dto.RelocationTrialResponse{}, err
+	}
+	if !scenario.HasEvaluationResults() {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("SCENARIO_NOT_EVALUATED", "relocation trial requires an evaluated scenario with placement results", nil)
+	}
+	var snapshot scenarioEvaluationSnapshot
+	if err := json.Unmarshal([]byte(scenario.InputSnapshotJSON), &snapshot); err != nil || len(snapshot.Zones) == 0 || len(snapshot.Racks) == 0 {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("INVALID_SCENARIO_SNAPSHOT", "scenario evaluation snapshot cannot support a relocation trial", err)
+	}
+	var load *model.EquipmentLoad
+	for i := range snapshot.Loads {
+		if snapshot.Loads[i].ID == req.LoadID {
+			load = &snapshot.Loads[i]
+			break
+		}
+	}
+	if load == nil {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("LOAD_NOT_IN_SCENARIO", fmt.Sprintf("load %d is not part of scenario %d", req.LoadID, id), nil)
+	}
+	var rack *model.Rack
+	for i := range snapshot.Racks {
+		if snapshot.Racks[i].ID == req.RackID {
+			rack = &snapshot.Racks[i]
+			break
+		}
+	}
+	if rack == nil {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("RACK_NOT_IN_SCENARIO", fmt.Sprintf("rack %d was not part of the evaluated scenario input", req.RackID), nil)
+	}
+	var zone *model.ThermalZone
+	for i := range snapshot.Zones {
+		if snapshot.Zones[i].ID == rack.ZoneID {
+			zone = &snapshot.Zones[i]
+			break
+		}
+	}
+	if zone == nil {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("INVALID_SCENARIO_SNAPSHOT", "target rack zone is missing from the scenario snapshot", nil)
+	}
+	var assignments []dto.RackAssignment
+	if err := json.Unmarshal([]byte(scenario.RackAssignmentsJSON), &assignments); err != nil {
+		return dto.RelocationTrialResponse{}, web.Unprocessable("INVALID_SCENARIO_SNAPSHOT", "scenario assignments cannot be decoded", err)
+	}
+	outcome := planner.SimulateRelocation(planner.Relocation{
+		Zones: snapshot.Zones, Loads: snapshot.Loads, Assignments: assignments,
+		Load: *load, Rack: *rack, Zone: *zone,
+	})
+	response := dto.RelocationTrialResponse{
+		ScenarioID: scenario.ID, LoadID: load.ID, LoadName: load.Name,
+		SourceRackID: outcome.SourceRackID, SourceRackCode: rackCodeOf(snapshot.Racks, outcome.SourceRackID),
+		TargetRackID: rack.ID, TargetRackCode: rack.RackCode,
+		TargetZoneID: zone.ID, TargetZoneCode: zone.ZoneCode,
+		Rack: outcome.Rack, Zone: outcome.Zone,
+		Feasible: outcome.Feasible, Violations: outcome.Violations, Summary: outcome.Summary,
+	}
+	return response, nil
+}
+
+func rackCodeOf(racks []model.Rack, id uint) string {
+	for _, rack := range racks {
+		if rack.ID == id {
+			return rack.RackCode
+		}
+	}
+	return ""
 }
 
 func (s *LayoutScenarioService) Transition(ctx context.Context, id uint, req dto.TransitionScenarioRequest, actor audit.Entry) (dto.ScenarioResponse, error) {

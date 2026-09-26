@@ -60,3 +60,31 @@ export interface ScenarioComparison {
   peak_temp_delta_c: number;
   summary: string[];
 }
+
+export interface RelocationRackResult {
+  rack_id: number;
+  rack_code: string;
+  power_kw: number;
+  power_limit_kw: number;
+  airflow_cfm: number;
+  airflow_limit_cfm: number;
+  rack_units: number;
+  rack_unit_limit: number;
+}
+
+export interface RelocationTrial {
+  scenario_id: number;
+  load_id: number;
+  load_name: string;
+  source_rack_id: number;
+  source_rack_code: string;
+  target_rack_id: number;
+  target_rack_code: string;
+  target_zone_id: number;
+  target_zone_code: string;
+  rack: RelocationRackResult;
+  zone: ZoneThermalResult;
+  feasible: boolean;
+  violations: ConstraintViolation[];
+  summary: string;
+}

@@ -72,6 +72,23 @@ func (h *LayoutScenarioHandler) Evaluate(c *gin.Context) {
 	web.OK(c, item)
 }
 
+func (h *LayoutScenarioHandler) RelocationTrial(c *gin.Context) {
+	id, ok := web.ParamID(c)
+	if !ok {
+		return
+	}
+	var req dto.RelocationTrialRequest
+	if !web.BindJSON(c, &req) {
+		return
+	}
+	trial, err := h.service.RelocationTrial(c.Request.Context(), id, req)
+	if err != nil {
+		web.Fail(c, err)
+		return
+	}
+	web.OK(c, trial)
+}
+
 func (h *LayoutScenarioHandler) Transition(c *gin.Context) {
 	id, ok := web.ParamID(c)
 	if !ok {

@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ApiClient, ApiPage } from './api-client';
-import { LayoutScenario, ScenarioComparison, ScenarioStatus } from '../../types/scenario';
+import { LayoutScenario, RelocationTrial, ScenarioComparison, ScenarioStatus } from '../../types/scenario';
 
 @Injectable({providedIn: 'root'})
 export class ScenarioApi {
@@ -14,4 +14,7 @@ export class ScenarioApi {
     return this.api.post(`/scenarios/${id}/transition`, {version, target_status: target, reason});
   }
   compare(leftId: number, rightId: number): Observable<ScenarioComparison> { return this.api.get(`/scenarios/${leftId}/compare`, {right_id: rightId}); }
+  relocationTrial(id: number, loadId: number, rackId: number): Observable<RelocationTrial> {
+    return this.api.post(`/scenarios/${id}/relocation-trial`, {load_id: loadId, rack_id: rackId});
+  }
 }
